@@ -13,6 +13,8 @@ import json
 import base64
 import nacl.utils
 from nacl.public import PublicKey, PrivateKey, Box
+import string
+import secrets
 # KeePassXC libraries
 from pykeepass import PyKeePass
 import uuid
@@ -22,6 +24,11 @@ SOCKET_NAME = 'kpxc_server'
 SOCKET_TIMEOUT = 60
 BUFF_SIZE = 4096
 KEEPASSXC_VERSION = '2.6.6'
+
+GEN_PASSWORD_LENGTH = 32
+GEN_PASSWORD_UPPER_LOWER = True
+GEN_PASSWORD_NUMERIC = True
+GEN_PASSWORD_SPECIAL = True
 
 class KeePassDatabase:
     def __init__(self):
@@ -221,10 +228,17 @@ class NativeMessagingClient:
 
 
     def __generate_password(self, message):
-        # TODO implement real password generation based on parameters
-        # length, upper/lower, numeric, special characters
+        alphabet = string.ascii_lowercase
+        if GEN_PASSWORD_UPPER_LOWER:
+            alphabet += string.ascii_uppercase
+        if GEN_PASSWORD_NUMERIC:
+            alphabet += string.digits
+        if GEN_PASSWORD_SPECIAL:
+            alphabet += string.punctuation
+        
         generated_login = 1
-        generated_password = 'qwerty12345'
+        generated_password = ''.join(secrets.choice(alphabet) for i in range(GEN_PASSWORD_LENGTH))
+
         response = { 'action': 'generate-password', \
                      'version': KEEPASSXC_VERSION, \
                      'entries': [ { 'login': generated_login, 'password': generated_password } ], \
