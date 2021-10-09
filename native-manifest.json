@@ -1,6 +1,6 @@
 {
     "name": "org.keepassxc.keepassxc_browser",
-    "description": "Backend serving usernames and passwords to the official keepass browser extension",
+    "description": "Proxy forwarding messages from the KeePassXC browser extension to the KeePassXC backend",
     "path": "kpxc-browser-proxy.py",
     "type": "stdio",
     "allowed_extensions": ["keepassxc-browser@keepassxc.org"],
