@@ -128,5 +128,5 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# development test KeePassXC file
+# KeePassXC file for testing purposes
 test/development.kdbx
