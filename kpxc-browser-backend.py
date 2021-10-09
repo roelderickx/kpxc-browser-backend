@@ -80,6 +80,28 @@ class KeePassDatabase:
         return return_groups
 
 
+    def create_group(self, groupname):
+        group_path = groupname.split('/')
+
+        # create recursive
+        is_dirty = False
+        sub_group = None
+        for sub_group_path in [ group_path[:index+1] for (index, g) in enumerate(group_path) ]:
+            group = self.kpdb.find_groups(path=sub_group_path[:-1])
+            sub_group = self.kpdb.find_groups(path=sub_group_path)
+
+            if sub_group is None:
+                sub_group = self.kpdb.add_group(group, sub_group_path[-1])
+                is_dirty = True
+
+        if is_dirty:
+            self.kpdb.save()
+
+        return_group = { 'name': sub_group.name, \
+                         'uuid': sub_group.uuid.hex }
+        return return_group
+
+
 
 class NativeMessagingClient:
     def __init__(self, client_id, database):
@@ -286,6 +308,16 @@ class NativeMessagingClient:
         return response
 
 
+    def __create_new_group(self, message):
+        decrypted_msg = self.__get_decrypted_message(message)
+
+        response = self.database.create_group(decrypted_msg['groupName'])
+        response.update( { 'action': 'create-new-group', \
+                           'version': KEEPASSXC_VERSION, \
+                           'success': 'true' } )
+        return response
+
+
     def __lock_database(self, message):
         decrypted_msg = self.__get_decrypted_message(message)
 
@@ -319,6 +351,8 @@ class NativeMessagingClient:
             response = self.__set_login(message)
         elif message['action'] == 'get-database-groups':
             response = self.__get_database_groups(message)
+        elif message['action'] == 'create-new-group':
+            response = self.__create_new_group(message)
         elif message['action'] == 'lock-database':
             response = self.__lock_database(message)
         elif message['action'] == 'database-locked':
@@ -326,9 +360,7 @@ class NativeMessagingClient:
         elif message['action'] == 'database-unlocked':
             pass # this is a reply to a message we initiated, safe to ignore
         else:
-            # TODO
-            # create-new-group
-            # get-totp
+            # TODO get-totp
             sys.stderr.write('UNKNOWN MESSAGE\n')
 
         # sign the response - this seems necessary for encrypted messages too
