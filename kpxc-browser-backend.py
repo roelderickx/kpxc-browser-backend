@@ -321,10 +321,10 @@ class NativeMessagingClient:
             response = self.__get_database_groups(message)
         elif message['action'] == 'lock-database':
             response = self.__lock_database(message)
-        elif message['action'] == '__database-locked':
-            pass # this is a reply but we can ignore the message
-        elif message['action'] == '__database-unlocked':
-            pass # this is a reply but we can ignore the message
+        elif message['action'] == 'database-locked':
+            pass # this is a reply to a message we initiated, safe to ignore
+        elif message['action'] == 'database-unlocked':
+            pass # this is a reply to a message we initiated, safe to ignore
         else:
             # TODO
             # create-new-group
@@ -364,7 +364,6 @@ class NativeMessagingClient:
 
     def send_message(self, action, client_id):
         nonce = nacl.utils.random(Box.NONCE_SIZE)
-        #return_nonce = self.__get_incremented_nonce(nonce)
         
         message = None
         if action == 'database-locked':
