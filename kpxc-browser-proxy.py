@@ -36,17 +36,11 @@ class NativeMessagingDaemon:
 
             self.queue.put(text)
 
-            #sys.stderr.write('IN: %s\n' % text.decode('utf-8'))
-            #sys.stderr.flush()
-
 
     def __send_native_message(self, response):
         sys.stdout.buffer.write(struct.pack('@I', len(response)))
         sys.stdout.buffer.write(response)
         sys.stdout.buffer.flush()
-
-        #sys.stderr.write('OUT: %s\n' % response.decode('utf-8'))
-        #sys.stderr.flush()
 
 
     def __send_failure_native_message(self, action):
@@ -88,7 +82,6 @@ class NativeMessagingDaemon:
         while not self.queue.empty():
             message = self.queue.get_nowait()
             if message == None:
-                #sys.stderr.write('Quitting gracefully\n')
                 return False
 
             try:
