@@ -1,0 +1,4 @@
+queuelib
+pynacl
+pykeepass
+

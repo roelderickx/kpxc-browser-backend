@@ -1,0 +1,8 @@
+{
+    "name": "org.keepassxc.keepassxc_browser",
+    "description": "Backend serving usernames and passwords to the official keepass browser extension",
+    "path": "kpxc-browser-proxy.py",
+    "type": "stdio",
+    "allowed_extensions": ["keepassxc-browser@keepassxc.org"],
+    "allowed_origins": ["chrome-extension://keepassxc-browser-keepassxc.org/"]
+}
