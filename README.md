@@ -20,7 +20,7 @@ This is straightforward using firefox, chrome or any chromium based browser. The
 
 ### Installing the proxy
 
-This script will be started by your browser when using the KeePassXC-rowser extension and provides a gateway for messages from the browser to the backend and back.
+This script will be started by your browser when using the KeePassXC-Browser extension and provides a gateway for messages from the browser to the backend and back.
 
 - Install nativemessaging using `pip install nativemessaging`
 - Run `nativemessaging-install.py firefox`
@@ -29,5 +29,5 @@ Note that the nativemessaging package is not required for the proxy to run, you 
 
 ### Installing the backend
 
-No installation is required, just put the script anywhere, modify the keepassxc database parameters and run it in a terminal.
+No installation is required. Just put the script anywhere, modify the KeePassXC database parameters and run it in a terminal.
 
