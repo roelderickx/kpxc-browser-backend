@@ -11,7 +11,6 @@ import threading
 import queue
 import json
 import base64
-import nacl.utils
 from nacl.public import PublicKey, PrivateKey, Box
 import string
 import secrets
@@ -20,15 +19,35 @@ from pykeepass import PyKeePass
 import uuid
 from urllib.parse import urlparse
 
-SOCKET_NAME = 'kpxc_server'
+SOCKET_NAME = 'org.keepassxc.KeePassXC.BrowserServer'
 SOCKET_TIMEOUT = 60
 BUFF_SIZE = 4096
-KEEPASSXC_VERSION = '2.6.6'
 
 GEN_PASSWORD_LENGTH = 32
 GEN_PASSWORD_UPPER_LOWER = True
 GEN_PASSWORD_NUMERIC = True
 GEN_PASSWORD_SPECIAL = True
+
+KEEPASSXC_VERSION = '2.6.6'
+ERROR_KEEPASS_DATABASE_NOT_OPENED = 1
+ERROR_KEEPASS_DATABASE_HASH_NOT_RECEIVED = 2
+ERROR_KEEPASS_CLIENT_PUBLIC_KEY_NOT_RECEIVED = 3
+ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE = 4
+ERROR_KEEPASS_TIMEOUT_OR_NOT_CONNECTED = 5
+ERROR_KEEPASS_ACTION_CANCELLED_OR_DENIED = 6
+ERROR_KEEPASS_CANNOT_ENCRYPT_MESSAGE = 7
+ERROR_KEEPASS_ASSOCIATION_FAILED = 8
+ERROR_KEEPASS_KEY_CHANGE_FAILED = 9
+ERROR_KEEPASS_ENCRYPTION_KEY_UNRECOGNIZED = 10
+ERROR_KEEPASS_NO_SAVED_DATABASES_FOUND = 11
+ERROR_KEEPASS_INCORRECT_ACTION = 12
+ERROR_KEEPASS_EMPTY_MESSAGE_RECEIVED = 13
+ERROR_KEEPASS_NO_URL_PROVIDED = 14
+ERROR_KEEPASS_NO_LOGINS_FOUND = 15
+ERROR_KEEPASS_NO_GROUPS_FOUND = 16
+ERROR_KEEPASS_CANNOT_CREATE_NEW_GROUP = 17
+ERROR_KEEPASS_NO_VALID_UUID_PROVIDED = 18
+
 
 class KeePassDatabase:
     def __init__(self):
@@ -51,6 +70,7 @@ class KeePassDatabase:
             login = { 'login': entry.username, \
                       'name': entry.title, \
                       'password': entry.password }
+            # TODO add uuid, group, totp, skipAutoSubmit
             if entry.expired:
                 login['expired'] = 'true'
             return_list.append(login)
@@ -117,6 +137,7 @@ class NativeMessagingClient:
 
         self.client_id = client_id
 
+        # TODO in theory it should be possible to connect to more than 1 database
         self.database = database
         self.associated_id_key = None
         self.associated_name = None
@@ -124,9 +145,9 @@ class NativeMessagingClient:
 
     def __log_json_message(self, prefix, message):
         current_time = time.localtime()
-        sys.stderr.write(time.strftime('%Y-%m-%d %H:%M:%S\n', current_time))
+        print(time.strftime('%Y-%m-%d %H:%M:%S', current_time))
         for k, v in message.items():
-            sys.stderr.write('%s %s: %s\n' % (prefix, k, v))
+            print('%s %s: %s' % (prefix, k, v))
 
 
     def __get_incremented_nonce(self, nonce):
@@ -144,12 +165,15 @@ class NativeMessagingClient:
 
 
     def __get_decrypted_message(self, message):
-        encrypted_msg = base64.b64decode(message['nonce'] + message['message'])
-        decrypted_msg = self.encryption_box.decrypt(encrypted_msg)
-        json_decrypted_msg = json.loads(decrypted_msg)
-        self.__log_json_message('DECRYPTED IN', json_decrypted_msg)
+        try:
+            encrypted_msg = base64.b64decode(message['nonce'] + message['message'])
+            decrypted_msg = self.encryption_box.decrypt(encrypted_msg)
+            json_decrypted_msg = json.loads(decrypted_msg)
+            self.__log_json_message('DECRYPTED IN', json_decrypted_msg)
 
-        return json_decrypted_msg
+            return json_decrypted_msg
+        except:
+            return None
 
 
     def __get_encrypted_response(self, response, return_nonce):
@@ -160,74 +184,157 @@ class NativeMessagingClient:
         return encrypted_response[Box.NONCE_SIZE:]
 
 
-    def __change_public_keys(self, message):
+    def __get_error_message(self, error_code):
+        if error_code == ERROR_KEEPASS_DATABASE_NOT_OPENED:
+            return 'Database not opened'
+        elif error_code == ERROR_KEEPASS_DATABASE_HASH_NOT_RECEIVED:
+            return 'Database hash not available'
+        elif error_code == ERROR_KEEPASS_CLIENT_PUBLIC_KEY_NOT_RECEIVED:
+            return 'Client public key not received'
+        elif error_code == ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE:
+            return 'Cannot decrypt message'
+        elif error_code == ERROR_KEEPASS_ACTION_CANCELLED_OR_DENIED:
+            return 'Action cancelled or denied'
+        elif error_code == ERROR_KEEPASS_CANNOT_ENCRYPT_MESSAGE:
+            return 'Message encryption failed.'
+        elif error_code == ERROR_KEEPASS_ASSOCIATION_FAILED:
+            return 'KeePassXC association failed, try again'
+        elif error_code == ERROR_KEEPASS_ENCRYPTION_KEY_UNRECOGNIZED:
+            return 'Encryption key is not recognized'
+        elif error_code == ERROR_KEEPASS_INCORRECT_ACTION:
+            return 'Incorrect action'
+        elif error_code == ERROR_KEEPASS_EMPTY_MESSAGE_RECEIVED:
+            return 'Empty message received'
+        elif error_code == ERROR_KEEPASS_NO_URL_PROVIDED:
+            return 'No URL provided'
+        elif error_code == ERROR_KEEPASS_NO_LOGINS_FOUND:
+            return 'No logins found'
+        elif error_code == ERROR_KEEPASS_NO_GROUPS_FOUND:
+            return 'No groups found'
+        elif error_code == ERROR_KEEPASS_CANNOT_CREATE_NEW_GROUP:
+            return 'Cannot create new group'
+        elif error_code == ERROR_KEEPASS_NO_VALID_UUID_PROVIDED:
+            return 'No valid UUID provided'
+        else:
+            return 'Unknown error'
+
+
+    def __get_error_reply(self, action, error_code):
+        response = {}
+        response['action'] = action
+        response['errorCode'] = error_code
+        response['error'] = self.__get_error_message(error_code)
+        return response
+
+
+    def __build_message(self, nonce):
+        message = {}
+        message['version'] = KEEPASSXC_VERSION
+        message['success'] = 'true'
+        message['nonce'] = base64.b64encode(nonce).decode('utf-8')
+        return message
+
+
+    def __change_public_keys(self, action, message):
+        nonce = base64.b64decode(message['nonce'])
         self.remote_public_key = base64.b64decode(message['publicKey'])
+
+        if not self.remote_public_key or not nonce:
+            return self.__get_error_reply(action, ERROR_KEEPASS_CLIENT_PUBLIC_KEY_NOT_RECEIVED)
 
         # generate our encryption keys
         private_key = PrivateKey.generate()
+        public_key = private_key.public_key
+        if not private_key or not public_key:
+            return self.__get_error_reply(action, ERROR_KEEPASS_ENCRYPTION_KEY_UNRECOGNIZED)
         self.encryption_box = Box(private_key, PublicKey(self.remote_public_key))
 
-        response = { 'action': 'change-public-keys', \
-                     'version': KEEPASSXC_VERSION, \
-                     'publicKey': base64.b64encode(bytes(private_key.public_key)).decode('utf-8'), \
-                     'success': 'true' }
+        response = self.__build_message(self.__get_incremented_nonce(nonce))
+        response['action'] = action
+        response['publicKey'] = base64.b64encode(bytes(public_key)).decode('utf-8')
         return response
 
 
-    def __get_databasehash(self, message):
+    def __get_databasehash(self, action, message):
+        nonce = base64.b64decode(message['nonce'])
         decrypted_msg = self.__get_decrypted_message(message)
 
-        response = { 'action': 'hash', \
-                     'version': KEEPASSXC_VERSION, \
-                     'hash': self.database.get_hash(), \
-                     'success': 'true' }
-        return response
+        if not decrypted_msg:
+            return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE)
 
+        database_hash = self.database.get_hash()
+        if not database_hash:
+            return self.__get_error_reply(action, ERROR_KEEPASS_DATABASE_HASH_NOT_RECEIVED)
 
-    def __test_associate(self, message):
-        decrypted_msg = self.__get_decrypted_message(message)
+        if action == 'get-databasehash':
+            return_nonce = self.__get_incremented_nonce(nonce)
+            response = self.__build_message(return_nonce)
+            response['hash'] = database_hash
 
-        response = None        
-        if self.associated_name and \
-           decrypted_msg['id'] == self.associated_name and \
-           decrypted_msg['key'] == self.associated_id_key:
-            response = { 'action': 'test-associate', \
-                         'version': KEEPASSXC_VERSION, \
-                         'hash': self.database.get_hash(), \
-                         'id': self.associated_name, \
-                         'success': 'true' }
+            if 'connectedKeys' in decrypted_msg and database_hash in decrypted_msg['connectedKeys']:
+                response['oldHash'] = database_hash
+
+            return response
         else:
-            response = { 'action': 'test-associate', \
-                         'version': KEEPASSXC_VERSION, \
-                         'errorCode': 8, \
-                         'error': 'Database not associated', \
-                         'success': 'false' }
-        return response
+            return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE)
 
 
-    def __associate(self, message):
+    def __test_associate(self, action, message):
+        nonce = base64.b64decode(message['nonce'])
         decrypted_msg = self.__get_decrypted_message(message)
+
+        if not decrypted_msg:
+            return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE)
+
+        response_key = decrypted_msg['key'] if 'key' in decrypted_msg else None
+        database_id = decrypted_msg['id'] if 'id' in decrypted_msg else None
+
+        if not response_key or not database_id:
+            return self.__get_error_reply(action, ERROR_KEEPASS_DATABASE_NOT_OPENED)
         
-        response = None
-        if base64.b64decode(decrypted_msg['key']) == self.remote_public_key:
-            self.associated_id_key = decrypted_msg['idKey']
-            self.associated_name = self.database.get_name()
-
-            response = { 'action': 'associate', \
-                         'version': KEEPASSXC_VERSION, \
-                         'hash': self.database.get_hash(), \
-                         'id': self.associated_name, \
-                         'success': 'true' }
+        if not self.associated_name or \
+           database_id != self.associated_name or \
+           response_key != self.associated_id_key:
+            return self.__get_error_reply(action, ERROR_KEEPASS_ASSOCIATION_FAILED)
         else:
-            response = { 'action': 'associate', \
-                         'version': KEEPASSXC_VERSION, \
-                         'errorCode': 8, \
-                         'error': 'Database not associated', \
-                         'success': 'false' }
-        return response
+            return_nonce = self.__get_incremented_nonce(nonce)
+            response = self.__build_message(return_nonce)
+            response['hash'] = self.database.get_hash();
+            response['id'] = self.associated_name;
+            return response
 
 
-    def __generate_password(self, message):
+    def __associate(self, action, message):
+        nonce = base64.b64decode(message['nonce'])
+        decrypted_msg = self.__get_decrypted_message(message)
+
+        if not decrypted_msg:
+            return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE)
+
+        key = decrypted_msg['key'] if 'key' in decrypted_msg else None
+        if not key:
+            return self.__get_error_reply(action, ERROR_KEEPASS_ASSOCIATION_FAILED)
+
+        response = None
+        if base64.b64decode(key) == self.remote_public_key:
+            self.associated_id_key = decrypted_msg['idKey']
+            self.associated_name = self.database.get_name() # TODO ask user via pop-up window
+
+            if not self.associated_name:
+                return self.__get_error_reply(action, ERROR_KEEPASS_ACTION_CANCELLED_OR_DENIED)
+
+            return_nonce = self.__get_incremented_nonce(nonce)
+            response = self.__build_message(return_nonce)
+            response['hash'] = self.database.get_hash();
+            response['id'] = self.associated_name;
+            return response
+        else:
+            return self.__get_error_reply(action, ERROR_KEEPASS_ASSOCIATION_FAILED)
+
+
+    def __generate_password(self, action, message):
+        nonce = base64.b64decode(message['nonce'])
+
         alphabet = string.ascii_lowercase
         if GEN_PASSWORD_UPPER_LOWER:
             alphabet += string.ascii_uppercase
@@ -235,151 +342,223 @@ class NativeMessagingClient:
             alphabet += string.digits
         if GEN_PASSWORD_SPECIAL:
             alphabet += string.punctuation
-        
-        generated_login = 1
+
+        generated_login = 1 # TODO should be entropy for backwards compatibility
         generated_password = ''.join(secrets.choice(alphabet) for i in range(GEN_PASSWORD_LENGTH))
 
-        response = { 'action': 'generate-password', \
-                     'version': KEEPASSXC_VERSION, \
-                     'entries': [ { 'login': generated_login, 'password': generated_password } ], \
-                     'success': 'true' }
+        return_nonce = self.__get_incremented_nonce(nonce)
+        response = self.__build_message(return_nonce)
+        response['entries'] = [ { 'login': generated_login, 'password': generated_password } ]
         return response
 
 
-    def __get_logins(self, message):
+    def __get_logins(self, action, message):
+        nonce = base64.b64decode(message['nonce'])
+
+        if not self.associated_id_key or not self.associated_name:
+            return self.__get_error_reply(action, ERROR_KEEPASS_ASSOCIATION_FAILED)
+
         decrypted_msg = self.__get_decrypted_message(message)
+
+        if not decrypted_msg:
+            return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE)
         
-        response = None
+        base_url = decrypted_msg['url'] if 'url' in decrypted_msg else None
+
+        if not base_url:
+            return self.__get_error_reply(action, ERROR_KEEPASS_NO_URL_PROVIDED)
+
         if decrypted_msg['keys'][0]['key'] == self.associated_id_key:
             base_url = decrypted_msg['url']
             qmark_pos = base_url.find('?')
             if qmark_pos > 0:
                 base_url = base_url[:qmark_pos]
 
+            # TODO
+            '''
+            const QJsonArray keys = decrypted.value("keys").toArray();
+
+            StringPairList keyList;
+            for (const QJsonValue val : keys) {
+                const QJsonObject keyObject = val.toObject();
+                keyList.push_back(qMakePair(keyObject.value("id").toString(), keyObject.value("key").toString()));
+            }
+
+            const QString id = decrypted.value("id").toString();
+            const QString formUrl = decrypted.value("submitUrl").toString();
+            const QString auth = decrypted.value("httpAuth").toString();
+            const bool httpAuth = auth.compare(TRUE_STR, Qt::CaseSensitive) == 0;
+            const QJsonArray users = browserService()->findMatchingEntries(id, siteUrl, formUrl, "", keyList, httpAuth);
+            '''
             logins = self.database.get_logins(base_url)
 
             if len(logins) == 0:
-                response = { 'action': 'get-logins', \
-                             'version': KEEPASSXC_VERSION, \
-                             'errorCode': 15, \
-                             'error': 'No logins found', \
-                             'success': 'true' }
+                return self.__get_error_reply(action, ERROR_KEEPASS_NO_LOGINS_FOUND)
             else:
-                response = { 'action': 'get-logins', \
-                             'version': KEEPASSXC_VERSION, \
-                             'hash': self.database.get_hash(), \
-                             'count': len(logins), \
-                             'entries': logins, \
-                             'success': 'true' }
+                return_nonce = self.__get_incremented_nonce(nonce)
+                response = self.__build_message(return_nonce)
+                response['count'] = len(logins)
+                response['entries'] = logins
+                response['hash'] = self.database.get_hash()
+                response['id'] = self.associated_name
+                return response
         else:
-            response = { 'action': 'associate', \
-                         'version': KEEPASSXC_VERSION, \
-                         'errorCode': 8, \
-                         'error': 'Database not associated', \
-                         'success': 'false' }
-        return response
+            return self.__get_error_reply(action, ERROR_KEEPASS_NO_LOGINS_FOUND)
 
 
-    def __set_login(self, message):
+    def __set_login(self, action, message):
+        nonce = base64.b64decode(message['nonce'])
+
+        if not self.associated_id_key or not self.associated_name:
+            return self.__get_error_reply(action, ERROR_KEEPASS_ASSOCIATION_FAILED)
+
         decrypted_msg = self.__get_decrypted_message(message)
+
+        if not decrypted_msg:
+            return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE)
         
-        group_uuid = decrypted_msg['groupUuid'] if 'groupUuid' in decrypted_msg else None
-        title = urlparse(decrypted_msg['url']).netloc
-        logins = self.database.set_login(group_uuid, \
-                                         title, \
-                                         decrypted_msg['login'], \
-                                         decrypted_msg['password'], \
-                                         decrypted_msg['url'])
+        base_url = decrypted_msg['url'] if 'url' in decrypted_msg else None
 
-        if len(logins) == 0:
-            response = { 'action': 'set-login', \
-                         'version': KEEPASSXC_VERSION, \
-                         'errorCode': 6, \
-                         'error': 'Login could not be saved', \
-                         'success': 'true' }
+        if not base_url:
+            return self.__get_error_reply(action, ERROR_KEEPASS_NO_URL_PROVIDED)
+        
+        title = urlparse(base_url).netloc
+        #id = decrypted_msg['id'] if 'id' in decrypted_msg else None
+        login = decrypted_msg['login'] if 'login' in decrypted_msg else None
+        password = decrypted_msg['password'] if 'password' in decrypted_msg else None
+        submit_url = decrypted_msg['submitUrl'] if 'submitUrl' in decrypted_msg else None
+        uuid = decrypted_msg['uuid'] if 'uuid' in decrypted_msg else None
+        group = decrypted_msg['group'] if 'group' in decrypted_msg else None
+        group_uuid = decrypted_msg['groupUuid'] if 'groupUuid' in decrypted_msg else None
+
+        # TODO improve
+        if uuid:
+            # update login
+            logins = self.database.set_login(group_uuid, title, login, password, base_url)
         else:
-            response = { 'action': 'set-login', \
-                     'version': KEEPASSXC_VERSION, \
-                     'hash': self.database.get_hash(), \
-                     'count': len(logins), \
-                     'entries': logins, \
-                     'error': '', \
-                     'success': 'true' }
+            # add login
+            logins = self.database.set_login(group_uuid, title, login, password, base_url)
+
+        return_nonce = self.__get_incremented_nonce(nonce)
+        response = self.__build_message(return_nonce)
+        response['count'] = None
+        response['entries'] = None
+        response['error'] = 'error' if len(logins) == 0 else 'success'
+        response['hash'] = self.database.get_hash()
         return response
 
 
-    def __get_database_groups(self, message):
+    def __get_database_groups(self, action, message):
+        nonce = base64.b64decode(message['nonce'])
+
+        if not self.associated_id_key or not self.associated_name:
+            return self.__get_error_reply(action, ERROR_KEEPASS_ASSOCIATION_FAILED)
+
         decrypted_msg = self.__get_decrypted_message(message)
+
+        if not decrypted_msg:
+            return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE)
+
+        action = decrypted_msg['action']
+        if not action or action != 'get-database-groups':
+            return self.__get_error_reply(action, ERROR_KEEPASS_INCORRECT_ACTION)
 
         root_group = self.database.get_root_group()
         groups = self.database.get_database_groups(root_group)
-        response = { 'action': 'get-database-groups', \
-                     'version': KEEPASSXC_VERSION, \
-                     'defaultGroup': root_group.name, \
-                     'defaultGroupAlwaysAllow': 'false', \
-                     'groups': groups, \
-                     'success': 'true' }
+
+        if len(groups) == 0:
+            return self.__get_error_reply(action, ERROR_KEEPASS_NO_GROUPS_FOUND)
+
+        response = self.__build_message(return_nonce)
+        response['groups'] = groups
         return response
 
 
-    def __create_new_group(self, message):
+    def __create_new_group(self, action, message):
+        nonce = base64.b64decode(message['nonce'])
+
+        if not self.associated_id_key or not self.associated_name:
+            return self.__get_error_reply(action, ERROR_KEEPASS_ASSOCIATION_FAILED)
+
         decrypted_msg = self.__get_decrypted_message(message)
 
-        response = self.database.create_group(decrypted_msg['groupName'])
-        response.update( { 'action': 'create-new-group', \
-                           'version': KEEPASSXC_VERSION, \
-                           'success': 'true' } )
+        if not decrypted_msg:
+            return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE)
+
+        action = decrypted_msg['action']
+        if not action or action != 'create-new-group':
+            return self.__get_error_reply(action, ERROR_KEEPASS_INCORRECT_ACTION)
+
+        group_name = decrypted_msg['groupName'] if 'groupName' in decrypted_msg else None
+        new_group = self.database.create_group(group_name)
+
+        if not newGroup or \
+           'name' not in new_group or not new_group['name'] or \
+           'uuid' not in new_group or not new_group['uuid']:
+            return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_CREATE_NEW_GROUP);
+
+        response = self.__build_message(return_nonce)
+        response.update(groups)
         return response
 
 
-    def __lock_database(self, message):
+    def __lock_database(self, action, message):
+        nonce = base64.b64decode(message['nonce'])
+
+        database_hash = self.database.get_hash()
+        if not database_hash:
+            return self.__get_error_reply(action, ERROR_KEEPASS_DATABASE_HASH_NOT_RECEIVED)
+
         decrypted_msg = self.__get_decrypted_message(message)
 
-        response = { 'action': 'lock-database', \
-                     'version': KEEPASSXC_VERSION, \
-                     'errorCode': 1, \
-                     'error': 'Database not opened', \
-                     'success': 'false' }
+        if not decrypted_msg:
+            return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE)
+
+        action = decrypted_msg['action']
+        if not action or action != 'lock-database':
+            return self.__get_error_reply(action, ERROR_KEEPASS_INCORRECT_ACTION)
+
+        # TODO lock database
+
+        response = self.__build_message(return_nonce)
         return response
 
 
     def process_message(self, message):
         self.__log_json_message('IN', message)
+        action = message['action']
         nonce = base64.b64decode(message['nonce'])
         return_nonce = self.__get_incremented_nonce(nonce)
         
         response = None
-        if message['action'] == 'change-public-keys':
-            response = self.__change_public_keys(message)
-        elif message['action'] == 'get-databasehash':
-            response = self.__get_databasehash(message)
-        elif message['action'] == 'test-associate':
-            response = self.__test_associate(message)
-        elif message['action'] == 'associate':
-            response = self.__associate(message)
-        elif message['action'] == 'generate-password':
-            response = self.__generate_password(message)
-        elif message['action'] == 'get-logins':
-            response = self.__get_logins(message)
-        elif message['action'] == 'set-login':
-            response = self.__set_login(message)
-        elif message['action'] == 'get-database-groups':
-            response = self.__get_database_groups(message)
-        elif message['action'] == 'create-new-group':
-            response = self.__create_new_group(message)
-        elif message['action'] == 'lock-database':
-            response = self.__lock_database(message)
-        elif message['action'] == 'database-locked':
-            pass # this is a reply to a message we initiated, safe to ignore
-        elif message['action'] == 'database-unlocked':
-            pass # this is a reply to a message we initiated, safe to ignore
+        if action == 'change-public-keys':
+            response = self.__change_public_keys(action, message)
+        elif action == 'get-databasehash':
+            response = self.__get_databasehash(action, message)
+        elif action == 'test-associate':
+            response = self.__test_associate(action, message)
+        elif action == 'associate':
+            response = self.__associate(action, message)
+        elif action == 'generate-password':
+            response = self.__generate_password(action, message)
+        elif action == 'get-logins':
+            response = self.__get_logins(action, message)
+        elif action == 'set-login':
+            response = self.__set_login(action, message)
+        elif action == 'get-database-groups':
+            response = self.__get_database_groups(action, message)
+        elif action == 'create-new-group':
+            response = self.__create_new_group(action, message)
+        elif action == 'lock-database':
+            response = self.__lock_database(action, message)
         else:
-            # TODO get-totp
+            # TODO
+            # get-totp
+            # delete-entry (undocumented)
             sys.stderr.write('UNKNOWN MESSAGE\n')
 
         # sign the response - this seems necessary for encrypted messages too
         response['nonce'] = base64.b64encode(return_nonce).decode('utf-8')
-        response['clientID'] = self.client_id
 
         # encrypt the response if required and sign again
         if message['action'] != 'change-public-keys':
@@ -397,20 +576,16 @@ class NativeMessagingClient:
 
 
     def __database_locked(self):
-        response = { 'action': 'database-locked', \
-                     'version': KEEPASSXC_VERSION }
+        response = { 'action': 'database-locked' }
         return response
 
 
     def __database_unlocked(self):
-        response = { 'action': 'database-unlocked', \
-                     'version': KEEPASSXC_VERSION }
+        response = { 'action': 'database-unlocked' }
         return response
 
 
-    def send_message(self, action, client_id):
-        nonce = nacl.utils.random(Box.NONCE_SIZE)
-        
+    def send_message(self, action):
         message = None
         if action == 'database-locked':
             message = self.__database_locked()
@@ -418,17 +593,6 @@ class NativeMessagingClient:
             message = self.__database_unlocked()
         else:
             sys.stderr.write('UNKNOWN MESSAGE\n')
-
-        # sign the response - this seems necessary for encrypted messages too
-        message['nonce'] = base64.b64encode(nonce).decode('utf-8')
-        message['clientID'] = self.client_id
-
-        # encrypt the response if required and sign again
-        encrypted_message = self.__get_encrypted_response(message, nonce)
-        message = { 'action': message['action'], \
-                    'message': base64.b64encode(encrypted_message).decode('utf-8'), \
-                    'nonce': base64.b64encode(nonce).decode('utf-8'), \
-                    'clientID': self.client_id }
 
         self.__log_json_message('OUT', message)
 
@@ -495,8 +659,8 @@ class UnixSocketDaemon:
                     response = message_client.process_message(json_message)
                     connection.sendall(response)
                     
-                    #if json_message['action'] == 'get-databasehash':
-                    #    message = message_client.send_message('database-unlocked', client_id)
+                    #if json_message['action'] in ('test-associate', 'associate'):
+                    #    message = message_client.send_message('database-unlocked')
                     #    connection.sendall(message)
                 else:
                     break

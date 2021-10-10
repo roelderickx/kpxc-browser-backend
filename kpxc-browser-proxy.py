@@ -12,7 +12,7 @@ import queue
 import socket
 import json
 
-SOCKET_NAME = 'kpxc_server'
+SOCKET_NAME = 'org.keepassxc.KeePassXC.BrowserServer'
 SOCKET_TIMEOUT = 60
 BUFF_SIZE = 4096
 
