@@ -53,6 +53,7 @@ class KeePassDatabase:
     def __init__(self):
         self.kpdb = PyKeePass('test/development.kdbx', password='12345')
         self.is_locked = True
+        self.lock_status_event_handler = None
 
 
     def get_hash(self):
@@ -64,9 +65,19 @@ class KeePassDatabase:
         return self.kpdb.filename
 
 
+    def add_lock_status_event_handler(self, lock_status_event_handler):
+        self.lock_status_event_handler = lock_status_event_handler
+
+
+    def __notify_lock_status(self, is_locked):
+        if self.lock_status_event_handler:
+            self.lock_status_event_handler(is_locked)
+
+
     def lock_database(self):
         if not self.is_locked:
             self.is_locked = True
+            self.__notify_lock_status(self.is_locked)
 
 
     def open_database(self, trigger_unlock):
@@ -75,6 +86,7 @@ class KeePassDatabase:
                 # TODO user action is required here
                 pass
             self.is_locked = False
+            self.__notify_lock_status(self.is_locked)
             # TODO return True if the user unlocked the database
             return True
         else:
@@ -148,8 +160,20 @@ class KeePassDatabase:
         return return_group
 
 
+    # https://github.com/fopina/kdbxpasswordpwned
+    def check_hash(password):
+        password = password.encode('utf-8')
+        h = hashlib.sha1(password).hexdigest().upper()
+        hh = h[5:]
+        for l in requests.get('https://api.pwnedpasswords.com/range/' + h[:5]).content.decode().splitlines():
+            ll = l.split(':')
+            if hh == ll[0]:
+                return int(ll[1])
+        return 0
 
-class KPXCBrowserClient:
+
+
+class KeePassXCBrowserClient:
     def __init__(self, client_id, database):
         self.remote_public_key = None
         self.encryption_box = None
@@ -642,7 +666,7 @@ class KPXCBrowserClient:
 
 
 
-class UnixSocketDaemon:
+class KeePassXCBrowserDaemon:
     def __init__(self, database):
         self.message_thread = None
         self.process_thread = None
@@ -650,6 +674,7 @@ class UnixSocketDaemon:
         self.queue = queue.Queue()
 
         self.database = database
+        self.database.add_lock_status_event_handler(self.notify_database_lock_status)
         self.message_clients = {}
 
 
@@ -682,7 +707,7 @@ class UnixSocketDaemon:
     def __get_message_client(self, client_id):
         # search message_client, create if not found
         if client_id not in self.message_clients:
-            self.message_clients[client_id] = KPXCBrowserClient(client_id, self.database)
+            self.message_clients[client_id] = KeePassXCBrowserClient(client_id, self.database)
 
         return self.message_clients[client_id]
 
@@ -702,6 +727,7 @@ class UnixSocketDaemon:
                     break
         finally:
             connection.close()
+            del self.message_clients[client_id]
 
 
     def start(self):
@@ -717,6 +743,14 @@ class UnixSocketDaemon:
             thread.start()
 
 
+    def notify_database_lock_status(self, is_locked):
+        for client_id in self.message_clients:
+            if is_locked:
+                self.message_clients[client_id].send_message('database-locked')
+            else:
+                self.message_clients[client_id].send_message('database-unlocked')
+
+
     def shutdown(self):
         if self.sock:
             self.sock.shutdown(socket.SHUT_RDWR)
@@ -727,7 +761,7 @@ class UnixSocketDaemon:
 database = KeePassDatabase()
 
 # start a daemon listening on the unix socket
-daemon = UnixSocketDaemon(database)
+daemon = KeePassXCBrowserDaemon(database)
 try:
     daemon.start()
 finally:
