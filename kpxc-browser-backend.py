@@ -208,11 +208,11 @@ class KeePassDatabase:
 
 
     def get_database_groups(self, group):
-        return_groups = { 'name': group.name, \
-                          'uuid': group.uuid.hex, \
-                          'children': [ self.get_database_groups(g) for g in group.subgroups ]
-                        }
-        return return_groups
+        return_group = {}
+        return_group['name'] = group.name
+        return_group['uuid'] = group.uuid.hex
+        return_group['children'] = [ self.get_database_groups(g) for g in group.subgroups ]
+        return return_group
 
 
     def create_group(self, groupname):
@@ -599,7 +599,7 @@ class KeePassXCBrowserClient:
 
         return_nonce = self.__get_incremented_nonce(nonce)
         message = self.__build_message(return_nonce)
-        message['groups'] = groups
+        message['groups'] = { 'groups': [ groups ] }
         return self.__build_response(action, message, return_nonce)
 
 
