@@ -16,8 +16,9 @@ import string
 import secrets
 # KeePassXC libraries
 from pykeepass import PyKeePass
-import uuid
+import uuid as uuidlib
 from urllib.parse import urlparse
+import re
 
 SOCKET_NAME = 'org.keepassxc.KeePassXC.BrowserServer'
 SOCKET_TIMEOUT = 60
@@ -29,6 +30,8 @@ GEN_PASSWORD_NUMERIC = True
 GEN_PASSWORD_SPECIAL = True
 
 KEEPASSXC_VERSION = '2.6.6'
+KEEPASS_TRUE_STR = 'true'
+KEEPASS_FALSE_STR = 'false'
 ERROR_KEEPASS_DATABASE_NOT_OPENED = 1
 ERROR_KEEPASS_DATABASE_HASH_NOT_RECEIVED = 2
 ERROR_KEEPASS_CLIENT_PUBLIC_KEY_NOT_RECEIVED = 3
@@ -50,6 +53,8 @@ ERROR_KEEPASS_NO_VALID_UUID_PROVIDED = 18
 
 
 class KeePassDatabase:
+    # TODO locked means no action is possible
+
     def __init__(self):
         self.kpdb = PyKeePass('test/development.kdbx', password='12345')
         self.is_locked = True
@@ -57,7 +62,6 @@ class KeePassDatabase:
 
 
     def get_hash(self):
-        #self.verify_lock()
         return self.kpdb.kdbx['body'].sha256.hex() # hex() requires python >= 3.5
 
 
@@ -93,37 +97,110 @@ class KeePassDatabase:
             return True
 
 
-    def get_logins(self, base_url):
-        entries = self.kpdb.find_entries(url=base_url)
-        
-        return_list = []
-        for entry in entries:
-            login = { 'login': entry.username, \
-                      'name': entry.title, \
-                      'password': entry.password }
-            # TODO add uuid, group, totp, skipAutoSubmit
-            if entry.expired:
-                login['expired'] = 'true'
-            return_list.append(login)
-        return return_list
+    def __entry_matches(self, entry, site_url, form_url):
+        # Use this special scheme to find entries by UUID
+        if site_url.startswith('keepassxc://by-uuid/'):
+            return site_url.endswith('by-uuid/' + entry.uuid.hex)
+        elif site_url.startswith('keepassxc://by-path/'):
+            return site_url.endswith('by-path/' + '/'.join(entry.path))
+        elif not entry.url:
+            return False
+        elif site_url.startswith('file://'):
+            return entry.url == form_url
+        else:
+            if '://' in entry.url:
+                entry_url = urlparse(entry.url)
+            elif entry.url.startswith('//'):
+                entry_url = urlparse(entry.url)
+                entry_url = entry_url._replace(scheme='https')
+            else:
+                entry_url = urlparse('//' + entry.url)
+                entry_url = entry_url._replace(scheme='https')
+
+            if not entry_url.netloc:
+                return False
+
+            parsed_site_url = urlparse(site_url)
+
+            # match port
+            if parsed_site_url.port and parsed_site_url.port != entry_url.port:
+                return False
+
+            # match scheme
+            if entry_url.scheme and parsed_site_url.scheme != entry_url.scheme:
+                return False
+
+            # check for illegal characters
+            regexp = re.compile('[<>\\^`{|}]')
+            if regexp.match(entry.url):
+                return False
+
+            # match base domain
+            if parsed_site_url.netloc != entry_url.netloc:
+                return False
+
+            # match subdomain with limited wildcard
+            if parsed_site_url.netloc.endswith(entry_url.netloc):
+                return True
+
+            return False
 
 
-    def set_login(self, group_uuid, title, username, password, url):
-        group = self.kpdb.root_group
+    def get_logins(self, site_url, form_url, http_auth):
+        entries = []
+
+        '''
+        for group in self.kpdb.groups:
+            # exclude groups which are recycled (?) or for wich resolve searching is disabled (?)
+            for entry in group.entries:
+                # exclude entries which are recycled (?)
+        '''
+        for entry in self.kpdb.entries:
+            if self.__entry_matches(entry, site_url, form_url):
+                login = {}
+                login['uuid'] = entry.uuid.hex
+                login['login'] = entry.username
+                login['name'] = '/'.join(entry.path)
+                login['password'] = entry.password
+                login['group'] = entry.group.name
+                if entry.expired:
+                    login['expired'] = KEEPASS_TRUE_STR
+                # TODO aren't totp and skipAutoSubmit available in entry?
+                entries.append(login)
+
+        return entries
+
+
+    def add_login(self, group_uuid, group, title, username, password, url):
+        # TODO create group if necessary?
+        grp = self.kpdb.root_group
         if group_uuid:
-            group = self.kpdb.find_groups(uuid=uuid.UUID(group_uuid))
+            grp = self.kpdb.find_groups(uuid=uuidlib.UUID(group_uuid))
 
-        # always update existing records
-        entries = self.kpdb.find_entries(title=title)
-        if len(entries) > 0:
-            self.kpdb.delete_entry(entries[0])
-        
-        self.kpdb.add_entry(group, title, username, password, url=url, icon='0')
-        self.kpdb.save()
+        self.kpdb.add_entry(grp, title, username, password, url=url, icon='0')
 
-        return [ { 'login': username, \
-                   'name': title, \
-                   'password': password } ]
+        try:
+            self.kpdb.save()
+            return True
+        except:
+            return False
+
+
+    def update_login(self, uuid, title, username, password, url):
+        existing_entry = self.kpdb.find_entries(uuid=uuidlib.UUID(uuid), first=True)
+        if not existing_entry:
+            return False
+
+        existing_entry.title = title
+        existing_entry.username = username
+        existing_entry.password = password
+        existing_entry.url = url
+
+        try:
+            self.kpdb.save()
+            return True
+        except:
+            return False
 
 
     def get_root_group(self):
@@ -273,7 +350,7 @@ class KeePassXCBrowserClient:
     def __build_message(self, nonce):
         message = {}
         message['version'] = KEEPASSXC_VERSION
-        message['success'] = 'true'
+        message['success'] = KEEPASS_TRUE_STR
         message['nonce'] = base64.b64encode(nonce).decode('utf-8')
         return message
 
@@ -424,34 +501,26 @@ class KeePassXCBrowserClient:
         
         nonce = base64.b64decode(message['nonce'])
 
-        base_url = decrypted_msg['url'] if 'url' in decrypted_msg else None
+        site_url = decrypted_msg['url'] if 'url' in decrypted_msg else None
 
-        if not base_url:
+        if not site_url:
             return self.__get_error_reply(action, ERROR_KEEPASS_NO_URL_PROVIDED)
 
-        if decrypted_msg['keys'][0]['key'] == self.associated_id_key:
-            base_url = decrypted_msg['url']
-            qmark_pos = base_url.find('?')
-            if qmark_pos > 0:
-                base_url = base_url[:qmark_pos]
+        '''keys = decrypted_msg['keys'] if 'keys' in decrypted_msg else None
+        key_list = {}
+        for key in keys:
+            key_id = key['id'] if 'id' in decrypted_msg else None
+            key_key = key['key'] if 'key' in decrypted_msg else None
+            if key_id and key_key:
+                key_list[key_id] = key_key'''
 
-            # TODO
-            '''
-            const QJsonArray keys = decrypted.value("keys").toArray();
+        database_id = decrypted_msg['id'] if 'id' in decrypted_msg else None
+        form_url = decrypted_msg['submitUrl'] if 'submitUrl' in decrypted_msg else None
+        auth = decrypted_msg['httpAuth'] if 'httpAuth' in decrypted_msg else None
+        http_auth = auth == KEEPASS_TRUE_STR
 
-            StringPairList keyList;
-            for (const QJsonValue val : keys) {
-                const QJsonObject keyObject = val.toObject();
-                keyList.push_back(qMakePair(keyObject.value("id").toString(), keyObject.value("key").toString()));
-            }
-
-            const QString id = decrypted.value("id").toString();
-            const QString formUrl = decrypted.value("submitUrl").toString();
-            const QString auth = decrypted.value("httpAuth").toString();
-            const bool httpAuth = auth.compare(TRUE_STR, Qt::CaseSensitive) == 0;
-            const QJsonArray users = browserService()->findMatchingEntries(id, siteUrl, formUrl, "", keyList, httpAuth);
-            '''
-            logins = self.database.get_logins(base_url)
+        if database_id == self.associated_name:
+            logins = self.database.get_logins(site_url, form_url, auth)
 
             if len(logins) == 0:
                 return self.__get_error_reply(action, ERROR_KEEPASS_NO_LOGINS_FOUND)
@@ -478,33 +547,31 @@ class KeePassXCBrowserClient:
         
         nonce = base64.b64decode(message['nonce'])
 
-        base_url = decrypted_msg['url'] if 'url' in decrypted_msg else None
+        url = decrypted_msg['url'] if 'url' in decrypted_msg else None
 
-        if not base_url:
+        if not url:
             return self.__get_error_reply(action, ERROR_KEEPASS_NO_URL_PROVIDED)
         
-        title = urlparse(base_url).netloc
-        #id = decrypted_msg['id'] if 'id' in decrypted_msg else None
-        login = decrypted_msg['login'] if 'login' in decrypted_msg else None
+        database_id = decrypted_msg['id'] if 'id' in decrypted_msg else None
+        uuid = decrypted_msg['uuid'] if 'uuid' in decrypted_msg else None
+        title = urlparse(url).netloc
+        username = decrypted_msg['login'] if 'login' in decrypted_msg else None
         password = decrypted_msg['password'] if 'password' in decrypted_msg else None
         submit_url = decrypted_msg['submitUrl'] if 'submitUrl' in decrypted_msg else None
-        uuid = decrypted_msg['uuid'] if 'uuid' in decrypted_msg else None
-        group = decrypted_msg['group'] if 'group' in decrypted_msg else None
         group_uuid = decrypted_msg['groupUuid'] if 'groupUuid' in decrypted_msg else None
+        group = decrypted_msg['group'] if 'group' in decrypted_msg else None
 
-        # TODO improve
+        result = False
         if uuid:
-            # update login
-            logins = self.database.set_login(group_uuid, title, login, password, base_url)
+            result = self.database.update_login(uuid, title, username, password, url)
         else:
-            # add login
-            logins = self.database.set_login(group_uuid, title, login, password, base_url)
+            result = self.database.add_login(group_uuid, group, title, username, password, url)
 
         return_nonce = self.__get_incremented_nonce(nonce)
         message = self.__build_message(return_nonce)
         message['count'] = None
         message['entries'] = None
-        message['error'] = 'error' if len(logins) == 0 else 'success'
+        message['error'] = 'success' if result else 'error'
         message['hash'] = self.database.get_hash()
         return self.__build_response(action, message, return_nonce)
 
@@ -598,7 +665,7 @@ class KeePassXCBrowserClient:
         if not action:
             return self.__get_error_reply(action, ERROR_KEEPASS_INCORRECT_ACTION)
         elif action != 'change-public-keys' and 'triggerUnlock' in message:
-            trigger_unlock = message['triggerUnlock'] == 'true'
+            trigger_unlock = message['triggerUnlock'] == KEEPASS_TRUE_STR
             if trigger_unlock:
                 if not self.remote_public_key:
                     return self.__get_error_reply(action, ERROR_KEEPASS_CLIENT_PUBLIC_KEY_NOT_RECEIVED)
