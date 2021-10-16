@@ -172,12 +172,16 @@ class KeePassDatabase:
 
 
     def add_login(self, group_uuid, group, title, username, password, url):
-        # TODO create group if necessary?
         grp = self.kpdb.root_group
         if group_uuid:
-            grp = self.kpdb.find_groups(uuid=uuidlib.UUID(group_uuid))
+            grp = self.kpdb.find_groups(uuid=uuidlib.UUID(group_uuid), first=True)
 
-        self.kpdb.add_entry(grp, title, username, password, url=url, icon='0')
+        existing_entry = self.kpdb.find_entries(group=grp, recursive=False, \
+                                                title=title, username=username, url=url, first=True)
+        if existing_entry:
+            self.update_login(existing_entry.uuid.hex, title, username, password, url)
+        else:
+            self.kpdb.add_entry(grp, title, username, password, url=url, icon='0')
 
         try:
             self.kpdb.save()
