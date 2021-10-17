@@ -159,6 +159,14 @@ class KeePassDatabase:
             return self.__group_is_recycled(group.group)
 
 
+    def __get_entry_custom_data(self, entry):
+        items = [ x.findall('Item') for x in entry._element.findall('CustomData') ]
+        flattened_items = [ item for item_list in items for item in item_list ]
+        custom_data = { y.find('Key').text: y.find('Value').text for y in flattened_items }
+
+        return custom_data
+
+
     def __entry_matches(self, entry, site_url, form_url):
         # Use this special scheme to find entries by UUID
         if site_url.startswith('keepassxc://by-uuid/'):
@@ -208,15 +216,7 @@ class KeePassDatabase:
             return False
 
 
-    def get_entry_custom_data(self, entry):
-        items = [ x.findall('Item') for x in entry._element.findall('CustomData') ]
-        flattened_items = [ item for item_list in items for item in item_list ]
-        custom_data = { y.find('Key').text: y.find('Value').text for y in flattened_items }
-
-        return custom_data
-
-
-    def get_logins(self, site_url, form_url, http_auth):
+    def get_logins(self, site_url, form_url, http_auth, realm=''):
         entries = []
 
         for group in self.kpdb.groups:
@@ -229,9 +229,38 @@ class KeePassDatabase:
                 if self.__group_is_recycled(entry.group):
                     continue
 
-                if self.__entry_matches(entry, site_url, form_url):
-                    custom_data = self.get_entry_custom_data(entry)
+                custom_data = self.__get_entry_custom_data(entry)
 
+                if 'BrowserHideEntry' in custom_data \
+                   and custom_data['BrowserHideEntry'] == KEEPASS_TRUE_STR:
+                    continue
+                elif not http_auth and 'BrowserOnlyHttpAuth' in custom_data \
+                     and custom_data['BrowserOnlyHttpAuth'] == KEEPASS_TRUE_STR:
+                    continue
+                elif http_auth and 'BrowserNotHttpAuth' in custom_data \
+                     and custom_data['BrowserNotHttpAuth'] == KEEPASS_TRUE_STR:
+                    continue
+
+                if 'KeePassXC-Browser Settings' in custom_data:
+                    settings = json.loads(custom_data['KeePassXC-Browser Settings'])
+                    allowed_hosts = settings['Allow'] if 'Allow' in settings else []
+                    denied_hosts = settings['Deny'] if 'Deny' in settings else []
+                    realm_setting = settings['Realm'] if 'Realm' in settings else []
+
+                    site_host = urlparse(site_url).netloc
+                    form_host = urlparse(form_url).netloc
+
+                    if site_host in allowed_hosts and (not form_host or form_host in allowed_hosts):
+                        pass # allowed
+                    elif site_host in denied_hosts or (form_host and form_host in denied_hosts):
+                        continue # denied
+                    elif not realm and realm != realm_setting:
+                        continue # denied
+
+                # TODO if expired then only add when expired credentials are allowed
+                #      according to user settings
+
+                if self.__entry_matches(entry, site_url, form_url):
                     login = {}
                     login['uuid'] = entry.uuid.hex
                     login['login'] = entry.username
@@ -370,7 +399,10 @@ class KeePassDatabase:
 
 
 class KeePassXCBrowserClient:
-    def __init__(self, client_id, database):
+    def __init__(self, connection, client_id, database):
+        self.connection = connection
+        self.message_lock = threading.Lock()
+
         self.remote_public_key = None
         self.encryption_box = None
 
@@ -829,7 +861,7 @@ class KeePassXCBrowserClient:
         return self.__build_response(action, message, return_nonce)
 
 
-    def process_message(self, message):
+    def __process_message(self, message):
         if not message:
             return self.__get_error_reply(action, ERROR_KEEPASS_EMPTY_MESSAGE_RECEIVED)
 
@@ -877,9 +909,13 @@ class KeePassXCBrowserClient:
 
         self.__log_json_message('OUT', response)
 
-        # return the response
-        flat_response = json.dumps(response).encode('utf-8')
-        return flat_response
+        return response
+
+
+    def process_message(self, message):
+        with self.message_lock:
+            response = self.__process_message(message)
+            self.connection.sendall(json.dumps(response).encode('utf-8'))
 
 
     def __database_locked(self):
@@ -903,9 +939,8 @@ class KeePassXCBrowserClient:
 
         self.__log_json_message('OUT', message)
 
-        # return the response
-        flat_message = json.dumps(message).encode('utf-8')
-        return flat_message
+        with self.message_lock:
+            self.connection.sendall(json.dumps(message).encode('utf-8'))
 
 
 
@@ -946,10 +981,11 @@ class KeePassXCBrowserDaemon:
         self.sock.listen(1)
 
 
-    def __get_message_client(self, client_id):
+    def __get_message_client(self, connection, client_id):
         # search message_client, create if not found
         if client_id not in self.message_clients:
-            self.message_clients[client_id] = KeePassXCBrowserClient(client_id, self.database)
+            self.message_clients[client_id] = \
+                        KeePassXCBrowserClient(connection, client_id, self.database)
 
         return self.message_clients[client_id]
 
@@ -962,9 +998,8 @@ class KeePassXCBrowserDaemon:
                     json_message = json.loads(message.decode('utf-8'))
 
                     client_id = json_message['clientID']
-                    message_client = self.__get_message_client(client_id)
-                    response = message_client.process_message(json_message)
-                    connection.sendall(response)
+                    message_client = self.__get_message_client(connection, client_id)
+                    message_client.process_message(json_message)
                 else:
                     break
         finally:
@@ -985,13 +1020,18 @@ class KeePassXCBrowserDaemon:
             thread.start()
 
 
-    def notify_database_lock_status(self, is_locked):
+    def __notify_database_lock_status(self, is_locked):
         for client_id in self.message_clients:
             if is_locked:
-                message = self.message_clients[client_id].send_message('database-locked')
+                self.message_clients[client_id].send_message('database-locked')
             else:
-                message = self.message_clients[client_id].send_message('database-unlocked')
-            # TODO connection.sendall(message)
+                self.message_clients[client_id].send_message('database-unlocked')
+
+
+    def notify_database_lock_status(self, is_locked):
+        thread = threading.Thread(target=self.__notify_database_lock_status, args=(is_locked, ))
+        thread.daemon = True
+        thread.start()
 
 
     def shutdown(self):
