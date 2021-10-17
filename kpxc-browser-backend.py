@@ -52,6 +52,58 @@ ERROR_KEEPASS_CANNOT_CREATE_NEW_GROUP = 17
 ERROR_KEEPASS_NO_VALID_UUID_PROVIDED = 18
 
 
+# extend the PyKeePass.Entry class to fetch CustomData
+# https://github.com/libkeepass/pykeepass/issues/197
+'''
+class Entry:
+    def _get_item_field(self, key):
+        field = self._xpath('CustomData/Item/Key[text()="{}"]/../Value'.format(key), first=True)
+        if field is not None:
+            return field.text
+
+
+    # does not work, field is not a child of self._element
+    def _set_item_field(self, key, value):
+        field = self._xpath('CustomData/Item/Key[text()="{}"]/..'.format(key), first=True)
+        if field is not None:
+            self._element.remove(field)
+        self._element.append(E.String(E.Key(key), E.Value(value)))
+
+
+    def _get_item_field_keys(self):
+        items = [ x.findall('Item') for x in self._element.findall('CustomData') ][0]
+        results = [ y.find('Key').text for y in items ]
+        return results
+
+
+    def set_custom_data(self, key, value):
+        self._set_item_field(key, value)
+
+
+    def get_custom_data(self, key):
+        return self._get_item_field(key)
+
+
+    def delete_custom_property(self, key):
+        if key not in self._get_item_field_keys():
+            raise AttributeError('No such key: {}'.format(key))
+        prop = self._xpath('CustomData/Item/Key[text()="{}"]/..'.format(key), first=True)
+        if prop is None:
+            raise AttributeError('Could not find property element')
+        self._element.remove(prop)
+
+
+    @property
+    def custom_data(self):
+        keys = self._get_item_field_keys(exclude_reserved=True)
+        props = {}
+        for k in keys:
+            props[k] = self._get_item_field(k)
+        return props
+'''
+
+
+
 class KeePassDatabase:
     # TODO locked means no action is possible
 
@@ -66,6 +118,8 @@ class KeePassDatabase:
 
 
     def get_name(self):
+        # TODO user interaction: You have received an association request.
+        #                        Please enter a unique name for this connection.
         return self.kpdb.filename
 
 
@@ -87,11 +141,10 @@ class KeePassDatabase:
     def open_database(self, trigger_unlock):
         if self.is_locked:
             if trigger_unlock:
-                # TODO user action is required here
+                # TODO user interaction: Database is locked: please enter your password to unlock.
                 pass
             self.is_locked = False
             self.__notify_lock_status(self.is_locked)
-            # TODO return True if the user unlocked the database
             return True
         else:
             return True
@@ -155,6 +208,14 @@ class KeePassDatabase:
             return False
 
 
+    def get_entry_custom_data(self, entry):
+        items = [ x.findall('Item') for x in entry._element.findall('CustomData') ]
+        flattened_items = [ item for item_list in items for item in item_list ]
+        custom_data = { y.find('Key').text: y.find('Value').text for y in flattened_items }
+
+        return custom_data
+
+
     def get_logins(self, site_url, form_url, http_auth):
         entries = []
 
@@ -169,6 +230,8 @@ class KeePassDatabase:
                     continue
 
                 if self.__entry_matches(entry, site_url, form_url):
+                    custom_data = self.get_entry_custom_data(entry)
+
                     login = {}
                     login['uuid'] = entry.uuid.hex
                     login['login'] = entry.username
@@ -177,7 +240,10 @@ class KeePassDatabase:
                     login['group'] = entry.group.name
                     if entry.expired:
                         login['expired'] = KEEPASS_TRUE_STR
-                    # TODO aren't totp and skipAutoSubmit available in entry?
+                    if 'otp' in entry.custom_properties:
+                        login['totp'] = self.get_current_totp(entry.uuid.hex)
+                    if 'BrowserSkipAutoSubmit' in custom_data:
+                        login['skipAutoSubmit'] = custom_data['BrowserSkipAutoSubmit']
                     entries.append(login)
 
         return entries
@@ -246,6 +312,7 @@ class KeePassDatabase:
 
 
     def create_group(self, groupname):
+        # TODO user interaction: Are you sure you want to create {groupname}? Yes - No
         group_path = groupname.split('/')
         sub_group = None
         is_dirty = False

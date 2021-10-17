@@ -9,6 +9,7 @@ Note that this is a proof of concept to investigate the KeePassXC-Browser protoc
 - Native messaging: https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Native_messaging
 - Encryption using pyNaCl: https://pynacl.readthedocs.io/en/latest/public/
 - PyKeePass documentation: https://pykeepass.readthedocs.io/en/latest/
+- PyOTP documentation: https://pyauth.github.io/pyotp/
 
 ## Installation
 
