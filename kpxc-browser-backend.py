@@ -187,10 +187,9 @@ class KeePassDatabase:
         group = self.kpdb.root_group
         if group_uuid:
             group = self.kpdb.find_groups(uuid=uuidlib.UUID(group_uuid), first=True)
-        # TODO what if group does not exist? group_uuid is None and group_name is not None?
 
-        existing_entry = self.kpdb.find_entries(group=group, recursive=False, \
-                                                title=title, username=username, url=url, first=True)
+        existing_entry = self.kpdb.find_entries(group=group, title=title, username=username, \
+                                                url=url, recursive=False, first=True)
         if existing_entry:
             return self.update_login(existing_entry.uuid.hex, title, username, password, url)
         else:
@@ -247,24 +246,16 @@ class KeePassDatabase:
 
 
     def create_group(self, groupname):
-        group_path = groupname.split('/')
+        sub_group = self.kpdb.add_group(self.kpdb.root_group, groupname)
 
-        # create recursive
-        is_dirty = False
-        sub_group = None
-        for sub_group_path in [ group_path[:index+1] for (index, g) in enumerate(group_path) ]:
-            group = self.kpdb.find_groups(path=sub_group_path[:-1])
-            sub_group = self.kpdb.find_groups(path=sub_group_path)
-
-            if sub_group is None:
-                sub_group = self.kpdb.add_group(group, sub_group_path[-1])
-                is_dirty = True
-
-        if is_dirty:
+        try:
             self.kpdb.save()
+        except:
+            return {}
 
-        return_group = { 'name': sub_group.name, \
-                         'uuid': sub_group.uuid.hex }
+        return_group = {}
+        return_group['name'] = sub_group.name
+        return_group['uuid'] = sub_group.uuid.hex
         return return_group
 
 
@@ -658,14 +649,15 @@ class KeePassXCBrowserClient:
         group_name = decrypted_msg['groupName'] if 'groupName' in decrypted_msg else None
         new_group = self.database.create_group(group_name)
 
-        if not newGroup or \
+        if not new_group or \
            'name' not in new_group or not new_group['name'] or \
            'uuid' not in new_group or not new_group['uuid']:
             return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_CREATE_NEW_GROUP);
 
         return_nonce = self.__get_incremented_nonce(nonce)
         message = self.__build_message(return_nonce)
-        message.update(groups)
+        message['name'] = new_group['name']
+        message['uuid'] = new_group['uuid']
         return self.__build_response(action, message, return_nonce)
 
 
