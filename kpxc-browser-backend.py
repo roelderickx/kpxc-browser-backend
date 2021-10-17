@@ -97,6 +97,15 @@ class KeePassDatabase:
             return True
 
 
+    def __group_is_recycled(self, group):
+        if group == self.kpdb.root_group:
+            return False
+        elif group == self.kpdb.recyclebin_group:
+            return True
+        else:
+            return self.__group_is_recycled(group.group)
+
+
     def __entry_matches(self, entry, site_url, form_url):
         # Use this special scheme to find entries by UUID
         if site_url.startswith('keepassxc://by-uuid/'):
@@ -149,39 +158,43 @@ class KeePassDatabase:
     def get_logins(self, site_url, form_url, http_auth):
         entries = []
 
-        '''
         for group in self.kpdb.groups:
-            # exclude groups which are recycled (?) or for wich resolve searching is disabled (?)
+            if self.__group_is_recycled(group):
+                continue
+            elif group.expired:
+                continue
+
             for entry in group.entries:
-                # exclude entries which are recycled (?)
-        '''
-        for entry in self.kpdb.entries:
-            if self.__entry_matches(entry, site_url, form_url):
-                login = {}
-                login['uuid'] = entry.uuid.hex
-                login['login'] = entry.username
-                login['name'] = '/'.join(entry.path)
-                login['password'] = entry.password
-                login['group'] = entry.group.name
-                if entry.expired:
-                    login['expired'] = KEEPASS_TRUE_STR
-                # TODO aren't totp and skipAutoSubmit available in entry?
-                entries.append(login)
+                if self.__group_is_recycled(entry.group):
+                    continue
+
+                if self.__entry_matches(entry, site_url, form_url):
+                    login = {}
+                    login['uuid'] = entry.uuid.hex
+                    login['login'] = entry.username
+                    login['name'] = entry.title
+                    login['password'] = entry.password
+                    login['group'] = entry.group.name
+                    if entry.expired:
+                        login['expired'] = KEEPASS_TRUE_STR
+                    # TODO aren't totp and skipAutoSubmit available in entry?
+                    entries.append(login)
 
         return entries
 
 
-    def add_login(self, group_uuid, group, title, username, password, url):
-        grp = self.kpdb.root_group
+    def add_login(self, group_uuid, group_name, title, username, password, url):
+        group = self.kpdb.root_group
         if group_uuid:
-            grp = self.kpdb.find_groups(uuid=uuidlib.UUID(group_uuid), first=True)
+            group = self.kpdb.find_groups(uuid=uuidlib.UUID(group_uuid), first=True)
+        # TODO what if group does not exist? group_uuid is None and group_name is not None?
 
-        existing_entry = self.kpdb.find_entries(group=grp, recursive=False, \
+        existing_entry = self.kpdb.find_entries(group=group, recursive=False, \
                                                 title=title, username=username, url=url, first=True)
         if existing_entry:
-            self.update_login(existing_entry.uuid.hex, title, username, password, url)
+            return self.update_login(existing_entry.uuid.hex, title, username, password, url)
         else:
-            self.kpdb.add_entry(grp, title, username, password, url=url, icon='0')
+            self.kpdb.add_entry(group, title, username, password, url=url, icon='0')
 
         try:
             self.kpdb.save()
@@ -215,7 +228,8 @@ class KeePassDatabase:
         return_group = {}
         return_group['name'] = group.name
         return_group['uuid'] = group.uuid.hex
-        return_group['children'] = [ self.get_database_groups(g) for g in group.subgroups ]
+        sub_groups = [ g for g in group.subgroups if g != self.kpdb.recyclebin_group ]
+        return_group['children'] = [ self.get_database_groups(g) for g in sub_groups ]
         return return_group
 
 
@@ -239,6 +253,12 @@ class KeePassDatabase:
         return_group = { 'name': sub_group.name, \
                          'uuid': sub_group.uuid.hex }
         return return_group
+
+
+    def get_totp(self, entry):
+        # entry.custom_properties['otp']
+        # if exists, returns: otpauth://totp/localhost:roel?secret=JBSWY3DPEHPK3PXP&period=30&digits=6&issuer=localhost
+        pass
 
 
     # https://github.com/fopina/kdbxpasswordpwned
@@ -727,7 +747,7 @@ class KeePassXCBrowserClient:
         elif action == 'database-unlocked':
             message = self.__database_unlocked()
         else:
-            sys.stderr.write('UNKNOWN MESSAGE\n')
+            return
 
         self.__log_json_message('OUT', message)
 
