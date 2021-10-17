@@ -220,6 +220,19 @@ class KeePassDatabase:
             return False
 
 
+    def delete_login(self, uuid):
+        existing_entry = self.kpdb.find_entries(uuid=uuidlib.UUID(uuid), first=True)
+        if not existing_entry:
+            return False
+
+        try:
+            self.kpdb.trash_entry(existing_entry)
+            self.kpdb.save()
+            return True
+        except:
+            return False
+
+
     def get_root_group(self):
         return self.kpdb.root_group
 
@@ -679,6 +692,33 @@ class KeePassXCBrowserClient:
         return self.__build_response(action, message, return_nonce)
 
 
+    def __delete_entry(self, action, message):
+        if not self.associated_id_key or not self.associated_name:
+            return self.__get_error_reply(action, ERROR_KEEPASS_ASSOCIATION_FAILED)
+
+        decrypted_msg = self.__get_decrypted_message(message)
+
+        if not decrypted_msg:
+            return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE)
+
+        nonce = base64.b64decode(message['nonce'])
+
+        action = decrypted_msg['action']
+        if not action or action != 'delete-entry':
+            return self.__get_error_reply(action, ERROR_KEEPASS_INCORRECT_ACTION)
+
+        uuid = decrypted_msg['uuid'] if 'uuid' in decrypted_msg else None
+        if not uuid:
+            return self.__get_error_reply(action, ERROR_KEEPASS_NO_VALID_UUID_PROVIDED)
+
+        result = self.database.delete_login(uuid)
+
+        return_nonce = self.__get_incremented_nonce(nonce)
+        message = self.__build_message(return_nonce)
+        message['success'] = KEEPASS_TRUE_STR if result else KEEPASS_FALSE_STR
+        return self.__build_response(action, message, return_nonce)
+
+
     def process_message(self, message):
         if not message:
             return self.__get_error_reply(action, ERROR_KEEPASS_EMPTY_MESSAGE_RECEIVED)
@@ -717,10 +757,11 @@ class KeePassXCBrowserClient:
             response = self.__create_new_group(action, message)
         elif action == 'lock-database':
             response = self.__lock_database(action, message)
+        elif action == 'delete-entry':
+            # the plugin does not send this message currently but it is implemented in KeePassXC
+            response = self.__delete_entry(action, message)
         else:
-            # TODO
-            # get-totp
-            # delete-entry (undocumented)
+            # TODO get-totp
             return self.__get_error_reply(action, ERROR_KEEPASS_INCORRECT_ACTION)
 
         self.__log_json_message('OUT', response)
@@ -765,7 +806,6 @@ class KeePassXCBrowserDaemon:
         self.queue = queue.Queue()
 
         self.database = database
-        self.database.add_lock_status_event_handler(self.notify_database_lock_status)
         self.message_clients = {}
 
 
@@ -837,9 +877,10 @@ class KeePassXCBrowserDaemon:
     def notify_database_lock_status(self, is_locked):
         for client_id in self.message_clients:
             if is_locked:
-                self.message_clients[client_id].send_message('database-locked')
+                message = self.message_clients[client_id].send_message('database-locked')
             else:
-                self.message_clients[client_id].send_message('database-unlocked')
+                message = self.message_clients[client_id].send_message('database-unlocked')
+            # TODO connection.sendall(message)
 
 
     def shutdown(self):
@@ -853,6 +894,7 @@ database = KeePassDatabase()
 
 # start a daemon listening on the unix socket
 daemon = KeePassXCBrowserDaemon(database)
+database.add_lock_status_event_handler(daemon.notify_database_lock_status)
 try:
     daemon.start()
 finally:
