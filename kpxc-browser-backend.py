@@ -246,12 +246,25 @@ class KeePassDatabase:
 
 
     def create_group(self, groupname):
-        sub_group = self.kpdb.add_group(self.kpdb.root_group, groupname)
+        group_path = groupname.split('/')
+        sub_group = None
+        is_dirty = False
+        for sub_group_path in [ group_path[:index+1] for (index, g) in enumerate(group_path) ]:
+            group = self.kpdb.find_groups(path=sub_group_path[:-1], first=True)
+            sub_group = self.kpdb.find_groups(path=sub_group_path, first=True)
 
-        try:
-            self.kpdb.save()
-        except:
+            if sub_group is None:
+                sub_group = self.kpdb.add_group(group, sub_group_path[-1])
+                is_dirty = True
+
+        if not sub_group:
             return {}
+
+        if is_dirty:
+            try:
+                self.kpdb.save()
+            except:
+                return {}
 
         return_group = {}
         return_group['name'] = sub_group.name
@@ -259,10 +272,21 @@ class KeePassDatabase:
         return return_group
 
 
-    def get_totp(self, entry):
-        # entry.custom_properties['otp']
-        # if exists, returns: otpauth://totp/localhost:roel?secret=JBSWY3DPEHPK3PXP&period=30&digits=6&issuer=localhost
-        pass
+    def get_current_totp(self, uuid):
+        existing_entry = self.kpdb.find_entries(uuid=uuidlib.UUID(uuid), first=True)
+        if not existing_entry:
+            return None
+
+        if 'otp' not in existing_entry.custom_properties:
+            return None
+
+        # TODO PyOTP: https://pyauth.github.io/pyotp/
+        '''
+        otp_auth = existing_entry.custom_properties['otp']
+        totp = pyotp.parse_uri(otp_auth)
+        return totp.now()
+        '''
+        return '123456'
 
 
     # https://github.com/fopina/kdbxpasswordpwned
@@ -684,6 +708,33 @@ class KeePassXCBrowserClient:
         return self.__build_response(action, message, return_nonce)
 
 
+    def __get_totp(self, action, message):
+        if not self.associated_id_key or not self.associated_name:
+            return self.__get_error_reply(action, ERROR_KEEPASS_ASSOCIATION_FAILED)
+
+        decrypted_msg = self.__get_decrypted_message(message)
+
+        if not decrypted_msg:
+            return self.__get_error_reply(action, ERROR_KEEPASS_CANNOT_DECRYPT_MESSAGE)
+
+        nonce = base64.b64decode(message['nonce'])
+
+        action = decrypted_msg['action']
+        if not action or action != 'get-totp':
+            return self.__get_error_reply(action, ERROR_KEEPASS_INCORRECT_ACTION)
+
+        uuid = decrypted_msg['uuid'] if 'uuid' in decrypted_msg else None
+        if not uuid:
+            return self.__get_error_reply(action, ERROR_KEEPASS_NO_VALID_UUID_PROVIDED)
+
+        totp = self.database.get_current_totp(uuid)
+
+        return_nonce = self.__get_incremented_nonce(nonce)
+        message = self.__build_message(return_nonce)
+        message['totp'] = totp
+        return self.__build_response(action, message, return_nonce)
+
+
     def __delete_entry(self, action, message):
         if not self.associated_id_key or not self.associated_name:
             return self.__get_error_reply(action, ERROR_KEEPASS_ASSOCIATION_FAILED)
@@ -749,11 +800,12 @@ class KeePassXCBrowserClient:
             response = self.__create_new_group(action, message)
         elif action == 'lock-database':
             response = self.__lock_database(action, message)
+        elif action == 'get-totp':
+            response = self.__get_totp(action, message)
         elif action == 'delete-entry':
             # the plugin does not send this message currently but it is implemented in KeePassXC
             response = self.__delete_entry(action, message)
         else:
-            # TODO get-totp
             return self.__get_error_reply(action, ERROR_KEEPASS_INCORRECT_ACTION)
 
         self.__log_json_message('OUT', response)
