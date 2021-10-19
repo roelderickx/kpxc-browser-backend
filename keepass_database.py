@@ -9,6 +9,7 @@ import json
 import re
 import string
 import secrets
+import pyotp
 
 GEN_PASSWORD_LENGTH = 32
 GEN_PASSWORD_UPPER_LOWER = True
@@ -220,6 +221,8 @@ class KeePassDatabase:
                 if self.__group_is_recycled(entry.group):
                     continue
 
+                custom_data = self.__get_entry_custom_data(entry)
+
                 login = {}
                 login['uuid'] = entry.uuid.hex
                 login['login'] = entry.username
@@ -248,7 +251,6 @@ class KeePassDatabase:
                 if additional_url_match:
                     continue
 
-                custom_data = self.__get_entry_custom_data(entry)
                 option_hide_entry = custom_data[KEEPASS_OPTION_HIDE_ENTRY] \
                             if KEEPASS_OPTION_HIDE_ENTRY in custom_data else None
                 option_only_http_auth = custom_data[KEEPASS_OPTION_ONLY_HTTP_AUTH] \
@@ -386,13 +388,9 @@ class KeePassDatabase:
         if 'otp' not in existing_entry.custom_properties:
             return None
 
-        # TODO PyOTP: https://pyauth.github.io/pyotp/
-        '''
         otp_auth = existing_entry.custom_properties['otp']
         totp = pyotp.parse_uri(otp_auth)
         return totp.now()
-        '''
-        return '123456'
 
 
     # https://github.com/fopina/kdbxpasswordpwned
