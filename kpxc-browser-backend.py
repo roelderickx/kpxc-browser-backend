@@ -568,9 +568,8 @@ class KeePassXCBrowserClient:
         else:
             return
 
-        self.__log_json_message('OUT', message)
-
         with self.message_lock:
+            self.__log_json_message('OUT', message)
             self.connection.sendall(json.dumps(message).encode('utf-8'))
 
 
