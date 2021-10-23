@@ -88,7 +88,7 @@ class KeePassDatabase:
 
     def __init__(self):
         self.kpdb = PyKeePass(KEEPASS_DATABASE, password=KEEPASS_PASSWORD)
-        self.is_locked = True
+        self.is_locked = False
         self.lock_status_event_handler = None
 
 
@@ -162,50 +162,46 @@ class KeePassDatabase:
         return custom_data
 
 
-    def __entry_matches(self, entry, site_url, form_url):
-        # Use this special scheme to find entries by UUID
-        if site_url.startswith('keepassxc://by-uuid/'):
-            return site_url.endswith('by-uuid/' + entry.uuid.hex)
-        elif site_url.startswith('keepassxc://by-path/'):
-            return site_url.endswith('by-path/' + '/'.join(entry.path))
-        elif not entry.url:
+    def __entry_matches(self, entry_url, site_url, form_url):
+        if not entry_url:
             return False
         elif site_url.startswith('file://'):
-            return entry.url == form_url
+            return entry_url == form_url
         else:
-            if '://' in entry.url:
-                entry_url = urlparse(entry.url)
-            elif entry.url.startswith('//'):
-                entry_url = urlparse(entry.url)
-                entry_url = entry_url._replace(scheme='https')
+            parsed_entry_url = None
+            if '://' in entry_url:
+                parsed_entry_url = urlparse(entry_url)
+            elif entry_url.startswith('//'):
+                parsed_entry_url = urlparse(entry_url)
+                parsed_entry_url = parsed_entry_url._replace(scheme='https')
             else:
-                entry_url = urlparse('//' + entry.url)
-                entry_url = entry_url._replace(scheme='https')
+                parsed_entry_url = urlparse('//' + entry_url)
+                parsed_entry_url = parsed_entry_url._replace(scheme='https')
 
-            if not entry_url.netloc:
+            if not parsed_entry_url.netloc:
                 return False
 
             parsed_site_url = urlparse(site_url)
 
             # match port
-            if parsed_site_url.port and parsed_site_url.port != entry_url.port:
+            if parsed_site_url.port and parsed_site_url.port != parsed_entry_url.port:
                 return False
 
             # match scheme
-            if entry_url.scheme and parsed_site_url.scheme != entry_url.scheme:
+            if parsed_entry_url.scheme and parsed_site_url.scheme != parsed_entry_url.scheme:
                 return False
 
             # check for illegal characters
             regexp = re.compile('[<>\\^`{|}]')
-            if regexp.match(entry.url):
+            if regexp.match(entry_url):
                 return False
 
             # match base domain
-            if parsed_site_url.netloc != entry_url.netloc:
+            if parsed_site_url.netloc != parsed_entry_url.netloc:
                 return False
 
             # match subdomain with limited wildcard
-            if parsed_site_url.netloc.endswith(entry_url.netloc):
+            if parsed_site_url.netloc.endswith(parsed_entry_url.netloc):
                 return True
 
             return False
@@ -241,15 +237,12 @@ class KeePassDatabase:
 
                 # search for additional url's starting with KP2A_URL
                 additional_url_match = False
-                # TODO  __entry_matches should not take entry but entry.url
-                '''
                 for prop_key in entry.custom_properties:
-                    if prop.startswith(KEEPASS_ADDITIONAL_URL) \
+                    if prop_key.startswith(KEEPASS_ADDITIONAL_URL) \
                        and self.__entry_matches(entry.custom_properties[prop_key], site_url, form_url) \
                        and login not in entries:
                         entries.append(login)
                         additional_url_match = True
-                '''
 
                 if additional_url_match:
                     continue
@@ -287,7 +280,14 @@ class KeePassDatabase:
                 # TODO if expired then only add when expired credentials are allowed
                 #      according to user settings
 
-                if self.__entry_matches(entry, site_url, form_url):
+                # Use this special scheme to find entries by UUID
+                if site_url.startswith('keepassxc://by-uuid/') and \
+                   site_url.endswith('by-uuid/' + entry.uuid.hex):
+                    entries.append(login)
+                elif site_url.startswith('keepassxc://by-path/') and \
+                     site_url.endswith('by-path/' + '/'.join(entry.path)):
+                    entries.append(login)
+                elif self.__entry_matches(entry.url, site_url, form_url):
                     entries.append(login)
 
         return entries
