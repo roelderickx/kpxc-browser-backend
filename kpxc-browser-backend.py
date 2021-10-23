@@ -220,8 +220,7 @@ class KeePassXCBrowserClient:
         if not response_key or not database_id:
             return self.__get_error_reply(action, ERROR_KEEPASS_DATABASE_NOT_OPENED)
         
-        if not self.associated_name or \
-           database_id != self.associated_name or \
+        if not self.associated_id_key or \
            response_key != self.associated_id_key:
             return self.__get_error_reply(action, ERROR_KEEPASS_ASSOCIATION_FAILED)
         else:
