@@ -32,5 +32,9 @@ Also note that the full path to the proxy is saved in your browser's native mess
 
 ### Installing the backend
 
-No installation is required. Just put `kpxc-browser-backend.py` and `keepass_database.py` in the same directory, modify the KeePassXC database parameters on top of `keepass_database.py` and run `kpxc-browser-backend.py` in a terminal.
+No installation is required. Just put `kpxc-browser-backend.py` and `keepass_database.py` in the same directory. Create a file named `kpxc-browser-backend.json` with your KeePassXC database parameters and run `kpxc-browser-backend.py` in a terminal.
 
+Example KeePassXC database parameters file:
+```
+{ "database": "test/development.kdbx", "password": "12345" }
+```

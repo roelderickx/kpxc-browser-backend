@@ -129,5 +129,5 @@ dmypy.json
 .pyre/
 
 # KeePassXC file for testing purposes
-kpsc-browser-backend.json
+kpxc-browser-backend.json
 test/development.kdbx
