@@ -11,9 +11,6 @@ import string
 import secrets
 import pyotp
 
-KEEPASS_DATABASE = 'test/development.kdbx'
-KEEPASS_PASSWORD = '12345'
-
 GEN_PASSWORD_LENGTH = 32
 GEN_PASSWORD_UPPER_LOWER = True
 GEN_PASSWORD_NUMERIC = True
@@ -87,7 +84,12 @@ class KeePassDatabase:
     # TODO locked means no action is possible
 
     def __init__(self):
-        self.kpdb = PyKeePass(KEEPASS_DATABASE, password=KEEPASS_PASSWORD)
+        # get connection parameters from kpxc-browser-backend.json
+        f = open('kpxc-browser-backend.json', 'r')
+        credentials = json.load(f)
+        f.close()
+        # open keepass database connection
+        self.kpdb = PyKeePass(credentials['database'], password=credentials['password'])
         self.is_locked = False
         self.lock_status_event_handler = None
 
