@@ -2,7 +2,7 @@
 
 A backend serving usernames and passwords from a KeePassXC database to the KeePassXC browser extension.
 
-Note that this is a proof of concept to investigate the KeePassXC-Browser protocol. The communication with the browser is feature-complete and stable, but since there is no frontend default user-interaction is assumed (eg when unlocking the database, allowing passwords to be used, etc). The master password is as such stored as plaintext in the source code.
+Note that this is a proof of concept to investigate the KeePassXC-Browser protocol. The communication with the browser is feature-complete and stable, but since there is no frontend default user-interaction is assumed (eg when unlocking the database, allowing passwords to be used, etc). The master password is as such stored as plaintext in a configuration file.
 
 ## Development information
 
