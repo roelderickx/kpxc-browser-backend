@@ -232,7 +232,7 @@ class KeePassDatabase:
                 login['group'] = entry.group.name
                 if entry.expired:
                     login['expired'] = KEEPASS_TRUE_STR
-                if 'otp' in entry.custom_properties:
+                if entry.otp:
                     login['totp'] = self.get_current_totp(entry.uuid.hex)
                 if KEEPASS_OPTION_SKIP_AUTO_SUBMIT in custom_data:
                     login['skipAutoSubmit'] = custom_data[KEEPASS_OPTION_SKIP_AUTO_SUBMIT]
@@ -390,11 +390,10 @@ class KeePassDatabase:
         if not existing_entry:
             return None
 
-        if 'otp' not in existing_entry.custom_properties:
+        if not existing_entry.otp:
             return None
 
-        otp_auth = existing_entry.custom_properties['otp']
-        totp = pyotp.parse_uri(otp_auth)
+        totp = pyotp.parse_uri(existing_entry.otp)
         return totp.now()
 
 

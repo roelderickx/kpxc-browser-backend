@@ -267,7 +267,7 @@ class KeePassXCBrowserClient:
 
         return_nonce = self.__get_incremented_nonce(nonce)
         message = self.__build_message(return_nonce)
-        message['entries'] = [ { 'login': generated_login, 'password': generated_password } ]
+        message['password'] = generated_password
         return self.__build_response(action, message, return_nonce)
 
 
