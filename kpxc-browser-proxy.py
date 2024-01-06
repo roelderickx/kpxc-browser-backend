@@ -11,6 +11,7 @@ import threading
 import queue
 import socket
 import json
+import nativemessaging
 
 SOCKET_NAME = 'org.keepassxc.KeePassXC.BrowserServer'
 SOCKET_TIMEOUT = 60
@@ -25,30 +26,18 @@ class NativeMessagingDaemon:
 
     def __message_reader(self):
         while True:
-            text_length_bytes = sys.stdin.buffer.read(4)
-
-            if len(text_length_bytes) == 0:
+            try:
+                text = nativemessaging.get_message()
+                self.queue.put(text)
+            except:
                 self.queue.put(None)
-                return
-
-            text_length = struct.unpack('@I', text_length_bytes)[0]
-            text = sys.stdin.buffer.read(text_length)
-
-            self.queue.put(text)
-
-
-    def __send_native_message(self, response):
-        sys.stdout.buffer.write(struct.pack('@I', len(response)))
-        sys.stdout.buffer.write(response)
-        sys.stdout.buffer.flush()
 
 
     def __send_failure_native_message(self, action):
         json_response = { 'action': action, \
                           'error': 'Not connected with KeePassXC.', \
                           'errorCode': 5 }
-        response = json.dumps(json_response)
-        self.__send_native_message(bytes(response, 'utf-8'))
+        nativemessaging.send_message(json_response)
 
 
     def __open_unix_socket(self):
@@ -85,9 +74,9 @@ class NativeMessagingDaemon:
                 return False
 
             try:
-                self.sock.send(message)
+                self.sock.send(json.dumps(message).encode('utf-8'))
                 response = self.sock.recv(BUFF_SIZE)
-                self.__send_native_message(response)
+                nativemessaging.send_message(json.loads(response))
             except socket.timeout:
                 sys.stderr.write('ERROR: No communication to host application\n')
                 self.__send_failure_native_message(json_message['action'])

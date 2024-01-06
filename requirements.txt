@@ -1,3 +1,4 @@
+nativemessaging-ng>=1.2.0
 queuelib>=1.6.0
 pynacl>=1.4.0
 pykeepass>=4.0.3

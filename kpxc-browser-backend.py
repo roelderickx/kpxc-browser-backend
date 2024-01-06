@@ -11,6 +11,7 @@ import threading
 import queue
 import json
 import base64
+import nativemessaging
 from nacl.public import PublicKey, PrivateKey, Box
 from keepass_database import *
 
@@ -668,6 +669,10 @@ class KeePassXCBrowserDaemon:
             self.sock.shutdown(socket.SHUT_RDWR)
             self.sock.close()
 
+
+# check if proxy is installed
+if len(nativemessaging.is_installed('org.keepassxc.keepassxc_browser')) == 0:
+    nativemessaging.install(['firefox', 'chrome'], 'native-manifest.json')
 
 # create a permanent connection to a keepass database for testing purposes
 database = KeePassDatabase()

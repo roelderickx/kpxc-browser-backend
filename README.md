@@ -23,12 +23,11 @@ This is straightforward using firefox, chrome or any chromium based browser. The
 
 This script will be started by your browser when using the KeePassXC-Browser extension and provides a gateway for messages from the browser to the backend and back.
 
-- Install nativemessaging using `pip install nativemessaging`
-- Run `nativemessaging-install.py firefox` or `nativemessaging-install.py chrome` depending on your browser. For other browsers you have to investigate where to install `native-manifest.json`.
+You should register the proxy with your browser using the `nativemessaging-install` script provided by the nativemessaging-ng module. Run it with either firefox or chrome as parameter, depending on your browser of choice. For other browsers you have to manually investigate where to install `native-manifest.json`.
 
-Note that the nativemessaging package is not required for the proxy to run, you can uninstall it afterwards. A possible addition would be to install the proxy automatically by the backend for user convenience.
+Note that you can skip this step, the backend will check if the proxy is registered and if not, it will try to install it for both firefox and chrome. All you need to do is restart the browser after running the backend for the first time.
 
-Also note that the full path to the proxy is saved in your browser's native messaging configuration. This means that if you want to move the proxy to another location after installation you are also required to re-run `nativemessaging-install.py` with the appropriate parameter.
+Also note that the full path to the proxy is saved in your browser's native messaging configuration. This means that if you want to move the proxy to another location after installation you are also required to re-run `nativemessaging-install` with the appropriate parameter.
 
 ### Installing the backend
 
