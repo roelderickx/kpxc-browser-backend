@@ -26,11 +26,8 @@ class NativeMessagingDaemon:
 
     def __message_reader(self):
         while True:
-            try:
-                text = nativemessaging.get_message()
-                self.queue.put(text)
-            except:
-                self.queue.put(None)
+            text = nativemessaging.get_message_raw()
+            self.queue.put(text)
 
 
     def __send_failure_native_message(self, action):
@@ -74,9 +71,9 @@ class NativeMessagingDaemon:
                 return False
 
             try:
-                self.sock.send(json.dumps(message).encode('utf-8'))
+                self.sock.send(message.encode('utf-8'))
                 response = self.sock.recv(BUFF_SIZE)
-                nativemessaging.send_message(json.loads(response))
+                nativemessaging.send_message_raw(response.decode('utf-8'))
             except socket.timeout:
                 sys.stderr.write('ERROR: No communication to host application\n')
                 self.__send_failure_native_message(json_message['action'])
