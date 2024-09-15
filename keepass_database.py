@@ -89,9 +89,14 @@ class KeePassDatabase:
         credentials = json.load(f)
         f.close()
         # open keepass database connection
-        self.kpdb = PyKeePass(credentials['database'], password=credentials['password'])
+        self.database_file = credentials['database']
+        self.kpdb = PyKeePass(self.database_file, password=credentials['password'])
         self.is_locked = False
         self.lock_status_event_handler = None
+
+
+    def reload(self):
+        self.kpdb.reload()
 
 
     def get_hash(self):

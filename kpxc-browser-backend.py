@@ -14,6 +14,7 @@ import base64
 import nativemessaging
 from nacl.public import PublicKey, PrivateKey, Box
 from keepass_database import *
+import watchfiles
 
 SOCKET_NAME = 'org.keepassxc.KeePassXC.BrowserServer'
 SOCKET_TIMEOUT = 60
@@ -583,6 +584,7 @@ class KeePassXCBrowserDaemon:
 
         self.database = database
         self.message_clients = {}
+        self.shutdown_event = threading.Event()
 
 
     def __open_unix_server_socket(self):
@@ -609,6 +611,17 @@ class KeePassXCBrowserDaemon:
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.bind(str(server_address))
         self.sock.listen(1)
+
+
+    def __change_watchdog(self):
+        while not self.shutdown_event.is_set():
+            for changes in watchfiles.watch(self.database.database_file, \
+                                            stop_event=self.shutdown_event):
+                print('Password file change detected, reloading...', end='')
+                self.database.reload()
+                print('done')
+                # Secrets seems to recreate the file, restart watching
+                break
 
 
     def __get_message_client(self, connection, client_id):
@@ -640,14 +653,23 @@ class KeePassXCBrowserDaemon:
     def start(self):
         # 01 open the unix socket
         self.__open_unix_server_socket()
-        
-        # 02 accept connections; read and process messages
-        while True:
-            connection, client_address = self.sock.accept()
 
-            thread = threading.Thread(target=self.__process_connection, args=(connection, ))
-            thread.daemon = True
-            thread.start()
+        # 02 listen for database changes
+        thread = threading.Thread(target=self.__change_watchdog)
+        thread.daemon = True
+        thread.start()
+
+        # 03 accept connections; read and process messages
+        while True:
+            try:
+                connection, client_address = self.sock.accept()
+
+                thread = threading.Thread(target=self.__process_connection, args=(connection, ))
+                thread.daemon = True
+                thread.start()
+            except KeyboardInterrupt:
+                self.shutdown_event.set()
+                break
 
 
     def __notify_database_lock_status(self, is_locked):
@@ -667,7 +689,6 @@ class KeePassXCBrowserDaemon:
     def shutdown(self):
         if self.sock:
             self.sock.shutdown(socket.SHUT_RDWR)
-            self.sock.close()
 
 
 # check if proxy is installed
